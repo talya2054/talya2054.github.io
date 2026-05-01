@@ -4,4 +4,8 @@ window.RECIPE_SYNC = {
   anonKey: "",
   table: "app_store",
   rowId: "main",
+  firebaseProjectId: "",
+  firebaseApiKey: "",
+  geminiApiKey: "",
+  geminiModel: "gemini-1.5-flash",
 };

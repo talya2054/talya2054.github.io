@@ -45,3 +45,19 @@ create table if not exists app_store (
    - `supabaseUrl`
    - `anonKey`
 5. Reload the site and use Home page sync controls.
+
+## Add Recipe AI + Firestore
+
+The Add Recipe page now supports:
+- `Analyze Recipe with AI` using Gemini.
+- Editable English fields: name, category, ingredients, instructions.
+- `Save to Cloud` to Firestore.
+
+Fill these values in `sync-config.js`:
+- `firebaseProjectId`
+- `firebaseApiKey`
+- `geminiApiKey`
+- Optional: `geminiModel` (default: `gemini-1.5-flash`)
+
+Firestore collection used:
+- `recipes`

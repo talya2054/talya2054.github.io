@@ -5,6 +5,10 @@ const DEFAULT_SYNC_CONFIG = {
   anonKey: "",
   table: "app_store",
   rowId: "main",
+  firebaseProjectId: "",
+  firebaseApiKey: "",
+  geminiApiKey: "",
+  geminiModel: "gemini-1.5-flash",
 };
 const CATEGORIES = ["Meal", "Dessert", "Breakfast", "Snack", "Soup", "Salad", "Bread", "Drink"];
 
@@ -119,7 +123,10 @@ function initAddRecipe() {
   const urlInput = document.querySelector("#recipeUrl");
   const titleInput = document.querySelector("#recipeTitle");
   const source = document.querySelector("#recipeSource");
-  const previewBox = document.querySelector("#previewBox");
+  const previewBox = document.querySelector("#saveStatus");
+  const ingredientsEditor = document.querySelector("#ingredientsEditor");
+  const stepsEditor = document.querySelector("#stepsEditor");
+  const analyzeBtn = document.querySelector("#analyzeBtn");
   const previewBtn = document.querySelector("#previewBtn");
   const saveBtn = document.querySelector("#saveBtn");
   const fetchBtn = document.querySelector("#fetchUrlBtn");
@@ -127,18 +134,54 @@ function initAddRecipe() {
   category.innerHTML = CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join("");
   source.value = sampleRecipeText;
 
-  previewBtn.addEventListener("click", () => {
-    const parsed = parseRecipe(source.value, category.value, titleInput.value.trim());
-    previewBox.innerHTML = renderPreview(parsed);
+  analyzeBtn.addEventListener("click", async () => {
+    const raw = source.value.trim();
+    if (!raw) {
+      previewBox.textContent = "Please paste a recipe first.";
+      return;
+    }
+    previewBox.textContent = "Analyzing with AI...";
+    try {
+      const aiRecipe = await analyzeRecipeWithGemini(raw);
+      titleInput.value = aiRecipe.title || titleInput.value;
+      if (CATEGORIES.includes(aiRecipe.category)) category.value = aiRecipe.category;
+      ingredientsEditor.value = (aiRecipe.ingredients || []).join("\n");
+      stepsEditor.value = (aiRecipe.steps || []).join("\n");
+      previewBox.textContent = "AI analysis complete. You can edit anything before saving.";
+    } catch (error) {
+      previewBox.textContent = "AI analysis failed. You can use Fallback Parse and edit manually.";
+    }
   });
 
-  saveBtn.addEventListener("click", () => {
-    const store = loadStore();
+  previewBtn.addEventListener("click", () => {
     const parsed = parseRecipe(source.value, category.value, titleInput.value.trim());
+    titleInput.value = parsed.title;
+    ingredientsEditor.value = parsed.ingredients.map((x) => x.original).join("\n");
+    stepsEditor.value = parsed.steps.join("\n");
+    previewBox.innerHTML = `${renderPreview(parsed)}<p>Fallback parse loaded into editable fields.</p>`;
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    const store = loadStore();
+    const parsed = buildRecipeFromEditors({
+      title: titleInput.value.trim(),
+      category: category.value,
+      ingredientsText: ingredientsEditor.value,
+      stepsText: stepsEditor.value,
+      sourceText: source.value,
+    });
     if (urlInput.value.trim()) parsed.sourceUrl = urlInput.value.trim();
     store.recipes.push(parsed);
     saveStore(store);
-    location.href = `recipe.html?id=${parsed.id}`;
+    previewBox.textContent = "Saving to cloud...";
+    try {
+      await saveRecipeToFirestore(parsed);
+      previewBox.textContent = "Recipe saved successfully!";
+      location.href = `recipe.html?id=${parsed.id}`;
+    } catch (error) {
+      previewBox.textContent = "Saved locally, but cloud save failed. Check Firebase config and rules.";
+      location.href = `recipe.html?id=${parsed.id}`;
+    }
   });
 
   fetchBtn.addEventListener("click", async () => {
@@ -595,6 +638,111 @@ function escapeHtmlKeepButtons(raw) {
 
 function round(value) {
   return Math.round(value * 10) / 10;
+}
+
+function buildRecipeFromEditors({ title, category, ingredientsText, stepsText, sourceText }) {
+  const ingredientLines = ingredientsText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const stepLines = stepsText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const ingredients = ingredientLines.map(toIngredientData);
+  return {
+    id: `r_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    title: title || "Untitled Recipe",
+    category: category || "Meal",
+    ingredients,
+    steps: stepLines.length ? stepLines : ["Add instructions manually."],
+    sourceUrl: "",
+    sourceText: sourceText || "",
+    reviews: [],
+    snapshots: [],
+    createdAt: Date.now(),
+    substitutions: collectSubstitutions(ingredients),
+  };
+}
+
+async function analyzeRecipeWithGemini(rawText) {
+  const cfg = getSyncConfig();
+  if (!cfg.geminiApiKey) {
+    throw new Error("Missing Gemini API key");
+  }
+  const model = cfg.geminiModel || "gemini-1.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.geminiApiKey)}`;
+
+  const prompt = [
+    "You are a recipe parser.",
+    "Return JSON only with keys: title, category, ingredients, steps.",
+    "All output must be in English.",
+    "Category must be one of: Meal, Dessert, Breakfast, Snack, Soup, Salad, Bread, Drink.",
+    "ingredients must be an array of strings.",
+    "steps must be an array of strings.",
+    "Recipe text:",
+    rawText,
+  ].join("\n");
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error("Gemini request failed");
+  }
+  const payload = await response.json();
+  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("No Gemini output");
+  const parsed = JSON.parse(text);
+  return {
+    title: String(parsed.title || "").trim(),
+    category: String(parsed.category || "Meal").trim(),
+    ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
+    steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
+  };
+}
+
+async function saveRecipeToFirestore(recipe) {
+  const cfg = getSyncConfig();
+  if (!cfg.firebaseProjectId || !cfg.firebaseApiKey) {
+    throw new Error("Missing Firebase project configuration");
+  }
+  const endpoint =
+    `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cfg.firebaseProjectId)}` +
+    `/databases/(default)/documents/recipes?documentId=${encodeURIComponent(recipe.id)}&key=${encodeURIComponent(cfg.firebaseApiKey)}`;
+
+  const doc = {
+    fields: {
+      id: { stringValue: recipe.id },
+      title: { stringValue: recipe.title },
+      category: { stringValue: recipe.category },
+      sourceUrl: { stringValue: recipe.sourceUrl || "" },
+      sourceText: { stringValue: recipe.sourceText || "" },
+      createdAt: { integerValue: String(recipe.createdAt) },
+      updatedAt: { integerValue: String(Date.now()) },
+      ingredientsJson: { stringValue: JSON.stringify(recipe.ingredients) },
+      stepsJson: { stringValue: JSON.stringify(recipe.steps) },
+      substitutionsJson: { stringValue: JSON.stringify(recipe.substitutions || []) },
+    },
+  };
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(doc),
+  });
+  if (!response.ok) {
+    throw new Error("Firestore save failed");
+  }
+  return response.json();
 }
 
 function getSyncConfig() {

@@ -32,34 +32,47 @@
               URL import works on some pages with readable structured data. If blocked, paste text below.
             </p>
           </div>
-          <div>
-            <label for="recipeCategory">Category</label>
-            <select id="recipeCategory"></select>
-          </div>
-          <div>
-            <label for="recipeTitle">Recipe title</label>
-            <input id="recipeTitle" type="text" placeholder="Recipe title" />
-          </div>
           <div class="full">
-            <label for="recipeSource">Recipe source text</label>
+            <label for="recipeSource">Input Zone: paste original recipe text</label>
             <textarea
               id="recipeSource"
               rows="13"
-              placeholder="Paste ingredients and instructions from any website..."
+              placeholder="Paste recipe text from WhatsApp, notes, or websites..."
             ></textarea>
           </div>
           <div class="full actions">
-            <button id="previewBtn" class="btn btn-primary" type="button">Preview</button>
-            <button id="saveBtn" class="btn btn-secondary" type="button">Save Recipe</button>
+            <button id="analyzeBtn" class="btn btn-primary" type="button">Analyze Recipe with AI</button>
+            <button id="previewBtn" class="btn btn-secondary" type="button">Fallback Parse</button>
           </div>
         </div>
       </section>
 
       <section class="panel">
         <div class="section-head">
-          <h2>Preview</h2>
+          <h2>Preview and Edit</h2>
         </div>
-        <div id="previewBox" class="preview-box">Preview will appear here.</div>
+        <div class="add-grid">
+          <div>
+            <label for="recipeTitle">Recipe Name</label>
+            <input id="recipeTitle" type="text" placeholder="Recipe name" />
+          </div>
+          <div>
+            <label for="recipeCategory">Category</label>
+            <select id="recipeCategory"></select>
+          </div>
+          <div class="full">
+            <label for="ingredientsEditor">Ingredients (one per line)</label>
+            <textarea id="ingredientsEditor" rows="8" placeholder="1 cup flour"></textarea>
+          </div>
+          <div class="full">
+            <label for="stepsEditor">Instructions (one step per line)</label>
+            <textarea id="stepsEditor" rows="8" placeholder="Preheat oven..."></textarea>
+          </div>
+          <div class="full actions">
+            <button id="saveBtn" class="btn btn-primary" type="button">Save to Cloud</button>
+          </div>
+        </div>
+        <div id="saveStatus" class="preview-box">Recipe preview will appear here after AI analysis.</div>
       </section>
     </main>
 
