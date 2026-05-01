@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recipe Atlas - Add Recipe</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-page="add">
+    <header class="site-header">
+      <a class="brand" href="index.html">Recipe Atlas</a>
+      <nav class="site-nav">
+        <a href="index.html">Home</a>
+        <a href="recipes.html">All Recipes</a>
+        <a class="active" href="add-recipe.html">Add Recipe</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section class="panel">
+        <div class="section-head">
+          <h1>Add Recipe</h1>
+        </div>
+        <div class="add-grid">
+          <div>
+            <label for="recipeUrl">Recipe URL</label>
+            <div class="inline-field">
+              <input id="recipeUrl" type="url" placeholder="https://example.com/recipe" />
+              <button id="fetchUrlBtn" class="btn btn-secondary" type="button">Fetch</button>
+            </div>
+            <p class="hint">
+              URL import works on some pages with readable structured data. If blocked, paste text below.
+            </p>
+          </div>
+          <div>
+            <label for="recipeCategory">Category</label>
+            <select id="recipeCategory"></select>
+          </div>
+          <div>
+            <label for="recipeTitle">Recipe title</label>
+            <input id="recipeTitle" type="text" placeholder="Recipe title" />
+          </div>
+          <div class="full">
+            <label for="recipeSource">Recipe source text</label>
+            <textarea
+              id="recipeSource"
+              rows="13"
+              placeholder="Paste ingredients and instructions from any website..."
+            ></textarea>
+          </div>
+          <div class="full actions">
+            <button id="previewBtn" class="btn btn-primary" type="button">Preview</button>
+            <button id="saveBtn" class="btn btn-secondary" type="button">Save Recipe</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Preview</h2>
+        </div>
+        <div id="previewBox" class="preview-box">Preview will appear here.</div>
+      </section>
+    </main>
+
+    <script src="sync-config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

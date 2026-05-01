@@ -1,0 +1,709 @@
+const APP_KEY = "recipe_atlas_v1";
+const DEFAULT_SYNC_CONFIG = {
+  enabled: false,
+  supabaseUrl: "",
+  anonKey: "",
+  table: "app_store",
+  rowId: "main",
+};
+const CATEGORIES = ["Meal", "Dessert", "Breakfast", "Snack", "Soup", "Salad", "Bread", "Drink"];
+
+const sampleRecipeText = `Lemon Olive Oil Cake
+Ingredients
+1 1/2 cups all-purpose flour
+2 tsp baking powder
+1/2 tsp salt
+3 large eggs
+3/4 cup sugar
+1/2 cup olive oil
+1/2 cup milk
+2 tbsp lemon juice
+1 tbsp lemon zest
+
+Instructions
+Preheat oven to 350F.
+Whisk flour, baking powder, and salt.
+Beat eggs and sugar until pale.
+Stream in olive oil and milk.
+Bake for 35 minutes.`;
+
+const substitutionMap = {
+  milk: ["oat milk", "almond milk"],
+  egg: ["flax egg", "applesauce"],
+  butter: ["olive oil", "coconut oil"],
+  sugar: ["brown sugar", "maple syrup"],
+  flour: ["cake flour", "1:1 gluten-free blend"],
+};
+
+init();
+
+async function init() {
+  await hydrateFromCloud();
+  const store = loadStore();
+  if (!store.recipes.length) {
+    seedStore(store);
+  }
+  const page = document.body.dataset.page;
+  if (page === "home") initHome();
+  if (page === "recipes") initRecipes();
+  if (page === "add") initAddRecipe();
+  if (page === "detail") initDetail();
+}
+
+function loadStore() {
+  const raw = localStorage.getItem(APP_KEY);
+  if (raw) return JSON.parse(raw);
+  return { recipes: [] };
+}
+
+function saveStore(store) {
+  localStorage.setItem(APP_KEY, JSON.stringify(store));
+  queueCloudSave(store);
+}
+
+function seedStore(store) {
+  const parsed = parseRecipe(sampleRecipeText, "Dessert", "Lemon Olive Oil Cake");
+  store.recipes.push(parsed);
+  saveStore(store);
+}
+
+function initHome() {
+  const store = loadStore();
+  const stats = [
+    { label: "Total recipes", value: String(store.recipes.length) },
+    { label: "Categories used", value: String(new Set(store.recipes.map((r) => r.category)).size) },
+    { label: "Reviews", value: String(store.recipes.reduce((sum, r) => sum + r.reviews.length, 0)) },
+  ];
+  document.querySelector("#statsGrid").innerHTML = stats
+    .map((s) => `<article class="stat-card"><div class="stat-label">${escapeHtml(s.label)}</div><div class="stat-value">${s.value}</div></article>`)
+    .join("");
+
+  const recent = [...store.recipes].sort((a, b) => b.createdAt - a.createdAt).slice(0, 6);
+  renderRecipeCards(recent, document.querySelector("#recentRecipes"));
+
+  setupSyncControls();
+}
+
+function initRecipes() {
+  const store = loadStore();
+  const searchInput = document.querySelector("#searchInput");
+  const categoryFilter = document.querySelector("#categoryFilter");
+  const sortBy = document.querySelector("#sortBy");
+  const allRecipes = document.querySelector("#allRecipes");
+
+  categoryFilter.innerHTML = [`<option value="all">All categories</option>`]
+    .concat(CATEGORIES.map((c) => `<option value="${c}">${c}</option>`))
+    .join("");
+
+  const draw = () => {
+    const query = searchInput.value.trim().toLowerCase();
+    const category = categoryFilter.value;
+    const sorted = [...store.recipes].filter((recipe) => {
+      const inCategory = category === "all" || recipe.category === category;
+      const haystack = `${recipe.title} ${recipe.ingredients.map((x) => x.name).join(" ")}`.toLowerCase();
+      return inCategory && haystack.includes(query);
+    });
+
+    if (sortBy.value === "name") sorted.sort((a, b) => a.title.localeCompare(b.title));
+    if (sortBy.value === "category") sorted.sort((a, b) => a.category.localeCompare(b.category));
+    if (sortBy.value === "newest") sorted.sort((a, b) => b.createdAt - a.createdAt);
+    renderRecipeCards(sorted, allRecipes);
+  };
+
+  [searchInput, categoryFilter, sortBy].forEach((el) => el.addEventListener("input", draw));
+  draw();
+}
+
+function initAddRecipe() {
+  const category = document.querySelector("#recipeCategory");
+  const urlInput = document.querySelector("#recipeUrl");
+  const titleInput = document.querySelector("#recipeTitle");
+  const source = document.querySelector("#recipeSource");
+  const previewBox = document.querySelector("#previewBox");
+  const previewBtn = document.querySelector("#previewBtn");
+  const saveBtn = document.querySelector("#saveBtn");
+  const fetchBtn = document.querySelector("#fetchUrlBtn");
+
+  category.innerHTML = CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join("");
+  source.value = sampleRecipeText;
+
+  previewBtn.addEventListener("click", () => {
+    const parsed = parseRecipe(source.value, category.value, titleInput.value.trim());
+    previewBox.innerHTML = renderPreview(parsed);
+  });
+
+  saveBtn.addEventListener("click", () => {
+    const store = loadStore();
+    const parsed = parseRecipe(source.value, category.value, titleInput.value.trim());
+    if (urlInput.value.trim()) parsed.sourceUrl = urlInput.value.trim();
+    store.recipes.push(parsed);
+    saveStore(store);
+    location.href = `recipe.html?id=${parsed.id}`;
+  });
+
+  fetchBtn.addEventListener("click", async () => {
+    const url = urlInput.value.trim();
+    if (!url) return;
+    try {
+      const response = await fetch(url, { mode: "cors" });
+      const html = await response.text();
+      const text = htmlToText(html);
+      source.value = text.slice(0, 18000);
+      if (!titleInput.value.trim()) {
+        titleInput.value = findTitleFromHtml(html) || "";
+      }
+    } catch (err) {
+      previewBox.textContent = "Could not fetch this URL directly here. Paste the recipe text manually below.";
+    }
+  });
+}
+
+function initDetail() {
+  const store = loadStore();
+  const id = new URLSearchParams(location.search).get("id");
+  const recipe = store.recipes.find((r) => r.id === id);
+  if (!recipe) {
+    document.querySelector(".container").innerHTML = `<section class="panel"><div class="empty">Recipe not found.</div></section>`;
+    return;
+  }
+
+  const recipeName = document.querySelector("#recipeName");
+  const categoryTag = document.querySelector("#recipeCategoryTag");
+  const ingredientList = document.querySelector("#ingredientList");
+  const stepList = document.querySelector("#stepList");
+  const scaleSelect = document.querySelector("#scaleSelect");
+  const customScale = document.querySelector("#customScale");
+  const applyScale = document.querySelector("#applyScale");
+  const scaleHint = document.querySelector("#scaleHint");
+  const cookModeBtn = document.querySelector("#cookModeBtn");
+  const printBtn = document.querySelector("#printBtn");
+  const reviewText = document.querySelector("#reviewText");
+  const reviewRating = document.querySelector("#reviewRating");
+  const reviewImage = document.querySelector("#reviewImage");
+  const saveReviewBtn = document.querySelector("#saveReviewBtn");
+  const snapshotBtn = document.querySelector("#snapshotBtn");
+  const snapshotList = document.querySelector("#snapshotList");
+  const subIngredient = document.querySelector("#subIngredient");
+  const subSuggestBtn = document.querySelector("#subSuggestBtn");
+  const subResult = document.querySelector("#subResult");
+
+  if (!Array.isArray(recipe.snapshots)) recipe.snapshots = [];
+
+  recipeName.textContent = recipe.title;
+  categoryTag.textContent = recipe.category;
+  let currentScale = 1;
+  let wakeLock = null;
+
+  const render = () => {
+    ingredientList.innerHTML = recipe.ingredients.map((item) => renderIngredient(item, currentScale)).join("");
+    stepList.innerHTML = recipe.steps.map((step) => renderStep(step, currentScale)).join("");
+    renderReviews(recipe.reviews);
+    renderSnapshots(recipe.snapshots, snapshotList);
+    subIngredient.innerHTML = recipe.ingredients
+      .map((item, idx) => `<option value="${idx}">${escapeHtml(item.name)}</option>`)
+      .join("");
+    scaleHint.textContent =
+      currentScale === 1
+        ? "Scale 1x: showing grams/ml plus original measurements."
+        : `Scale ${currentScale}x: showing scaled metric values only.`;
+    wireStepTimers();
+  };
+
+  scaleSelect.addEventListener("change", () => {
+    currentScale = Number(scaleSelect.value);
+    customScale.value = "";
+    render();
+  });
+
+  applyScale.addEventListener("click", () => {
+    const custom = Number(customScale.value);
+    if (!custom || custom <= 0) return;
+    currentScale = custom;
+    scaleSelect.value = "1";
+    render();
+  });
+
+  cookModeBtn.addEventListener("click", async () => {
+    if (!("wakeLock" in navigator)) {
+      cookModeBtn.textContent = "Wake lock unavailable";
+      return;
+    }
+    try {
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        cookModeBtn.textContent = "Cook Mode";
+      } else {
+        wakeLock = await navigator.wakeLock.request("screen");
+        cookModeBtn.textContent = "Cook Mode On";
+        wakeLock.addEventListener("release", () => {
+          cookModeBtn.textContent = "Cook Mode";
+          wakeLock = null;
+        });
+      }
+    } catch {
+      cookModeBtn.textContent = "Wake lock blocked";
+    }
+  });
+
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState === "visible" && wakeLock === null && cookModeBtn.textContent === "Cook Mode On") {
+      try {
+        wakeLock = await navigator.wakeLock.request("screen");
+      } catch {
+        cookModeBtn.textContent = "Wake lock blocked";
+      }
+    }
+  });
+
+  printBtn.addEventListener("click", () => window.print());
+
+  snapshotBtn.addEventListener("click", () => {
+    recipe.snapshots.unshift({
+      id: `s_${Date.now()}`,
+      createdAt: Date.now(),
+      scale: currentScale,
+      ingredients: recipe.ingredients.map((x) => ({ ...x })),
+      steps: [...recipe.steps],
+    });
+    saveStore(store);
+    render();
+  });
+
+  saveReviewBtn.addEventListener("click", async () => {
+    const text = reviewText.value.trim();
+    if (!text) return;
+    const image = await fileToDataUrl(reviewImage.files[0]);
+    recipe.reviews.unshift({
+      id: String(Date.now()),
+      text,
+      rating: Number(reviewRating.value),
+      image: image || "",
+      createdAt: Date.now(),
+    });
+    saveStore(store);
+    reviewText.value = "";
+    reviewImage.value = "";
+    reviewRating.value = "5";
+    render();
+  });
+
+  subSuggestBtn.addEventListener("click", () => {
+    const idx = Number(subIngredient.value);
+    const item = recipe.ingredients[idx];
+    if (!item) return;
+    const key = Object.keys(substitutionMap).find((k) => item.name.toLowerCase().includes(k));
+    const swaps = key ? substitutionMap[key] : ["closest same-role ingredient", "check flavor balance"];
+    subResult.innerHTML = `
+      <article class="review-card">
+        <p><strong>${escapeHtml(item.name)}</strong></p>
+        <p>${swaps.map((s) => escapeHtml(s)).join(", ")}</p>
+      </article>
+    `;
+  });
+
+  render();
+}
+
+function renderRecipeCards(recipes, target) {
+  if (!recipes.length) {
+    target.innerHTML = `<div class="empty">No recipes match this view yet.</div>`;
+    return;
+  }
+  target.innerHTML = recipes
+    .map(
+      (r) => `
+      <article class="recipe-card">
+        <h3>${escapeHtml(r.title)}</h3>
+        <p>${escapeHtml(r.category)}</p>
+        <p class="hint">${r.ingredients.length} ingredients</p>
+        <a class="btn btn-secondary" href="recipe.html?id=${encodeURIComponent(r.id)}">Open</a>
+      </article>
+    `,
+    )
+    .join("");
+}
+
+function renderPreview(recipe) {
+  return `
+    <h3>${escapeHtml(recipe.title)}</h3>
+    <p class="hint">${escapeHtml(recipe.category)}</p>
+    <p><strong>Ingredients:</strong> ${recipe.ingredients.length}</p>
+    <p><strong>Steps:</strong> ${recipe.steps.length}</p>
+  `;
+}
+
+function renderIngredient(item, scale) {
+  const grams = round(item.grams * scale);
+  const hasLiquid = item.isLiquid;
+  const ml = hasLiquid ? round(item.ml * scale) : null;
+  if (scale === 1) {
+    const base = hasLiquid
+      ? `${grams} g (${ml} ml)`
+      : `${grams} g`;
+    return `<li><strong>${escapeHtml(item.name)}</strong>: ${base} | original: ${escapeHtml(item.original)}</li>`;
+  }
+  return hasLiquid
+    ? `<li><strong>${escapeHtml(item.name)}</strong>: ${grams} g (${ml} ml)</li>`
+    : `<li><strong>${escapeHtml(item.name)}</strong>: ${grams} g</li>`;
+}
+
+function renderStep(step, scale) {
+  const withTimer = step.replace(/(\d+)\s*min/gi, (match, mins) => {
+    const scaled = Math.max(1, round(Number(mins) * scale));
+    return `${scaled} min <button class="timer-chip" type="button" data-minutes="${scaled}">Start ${scaled}m</button>`;
+  });
+  return `<li>${escapeHtmlKeepButtons(withTimer)}</li>`;
+}
+
+function wireStepTimers() {
+  document.querySelectorAll(".timer-chip").forEach((button) => {
+    button.addEventListener("click", () => {
+      const minutes = Number(button.dataset.minutes);
+      startCountdown(button, minutes * 60);
+    });
+  });
+}
+
+function startCountdown(button, secondsLeft) {
+  button.disabled = true;
+  const tick = () => {
+    const m = Math.floor(secondsLeft / 60);
+    const s = String(secondsLeft % 60).padStart(2, "0");
+    button.textContent = `${m}:${s}`;
+    if (secondsLeft === 0) {
+      button.textContent = "Done";
+      try {
+        const audio = new Audio("data:audio/wav;base64,UklGRlQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=");
+        audio.play();
+      } catch {}
+      return;
+    }
+    secondsLeft -= 1;
+    setTimeout(tick, 1000);
+  };
+  tick();
+}
+
+function renderReviews(reviews) {
+  const reviewList = document.querySelector("#reviewList");
+  if (!reviews.length) {
+    reviewList.innerHTML = `<div class="empty">No reviews yet.</div>`;
+    return;
+  }
+  reviewList.innerHTML = reviews
+    .map((r) => {
+      return `
+        <article class="review-card">
+          <p><strong>Rating:</strong> ${r.rating}/5</p>
+          <p>${escapeHtml(r.text)}</p>
+          ${r.image ? `<img src="${r.image}" alt="Recipe result photo" />` : ""}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderSnapshots(snapshots, target) {
+  if (!snapshots.length) {
+    target.innerHTML = `<div class="empty">No snapshots yet.</div>`;
+    return;
+  }
+  target.innerHTML = snapshots
+    .map((snap) => {
+      const date = new Date(snap.createdAt).toLocaleString();
+      return `
+        <article class="review-card">
+          <p><strong>${escapeHtml(date)}</strong> | scale ${snap.scale}x</p>
+          <p>${snap.ingredients.length} ingredients captured.</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function parseRecipe(text, category, explicitTitle) {
+  const normalized = text.replace(/\r/g, "");
+  const lines = normalized.split("\n").map((l) => l.trim()).filter(Boolean);
+  const title = explicitTitle || lines[0] || "Untitled Recipe";
+  let mode = "intro";
+  const ingredientLines = [];
+  const steps = [];
+
+  lines.slice(1).forEach((line) => {
+    if (/^(ingredients?|what you need)$/i.test(line)) {
+      mode = "ing";
+      return;
+    }
+    if (/^(instructions?|directions?|method|steps)$/i.test(line)) {
+      mode = "step";
+      return;
+    }
+    if (mode === "ing" || looksLikeIngredient(line)) {
+      mode = "ing";
+      ingredientLines.push(cleanBullet(line));
+      return;
+    }
+    if (mode === "step" || looksLikeStep(line)) {
+      mode = "step";
+      steps.push(cleanBullet(line));
+    }
+  });
+
+  const ingredients = ingredientLines.map(toIngredientData);
+  return {
+    id: `r_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    title,
+    category: category || "Meal",
+    ingredients,
+    steps: steps.length ? steps : ["Add instructions manually."],
+    sourceUrl: "",
+    reviews: [],
+    snapshots: [],
+    createdAt: Date.now(),
+    substitutions: collectSubstitutions(ingredients),
+  };
+}
+
+function toIngredientData(line) {
+  const parsed = parseAmount(line);
+  const rest = line.replace(parsed.raw, "").trim();
+  const name = rest || line;
+  const isLiquid = /\b(milk|water|oil|juice|broth|cream)\b/i.test(name);
+  const gramsPerUnit = resolveGramsPerUnit(parsed.unit, name);
+  const grams = parsed.value * gramsPerUnit;
+  const ml = isLiquid ? parsed.value * resolveMlPerUnit(parsed.unit) : 0;
+  return {
+    name,
+    original: line,
+    grams: Math.max(1, round(grams)),
+    ml: Math.max(0, round(ml)),
+    isLiquid,
+  };
+}
+
+function parseAmount(line) {
+  const match = line.match(/^((?:\d+\s+)?\d+\/\d+|\d+(?:\.\d+)?)\s*([a-zA-Z]+)?/);
+  if (!match) return { value: 1, unit: "unit", raw: "" };
+  return {
+    value: numberFromText(match[1]),
+    unit: (match[2] || "unit").toLowerCase(),
+    raw: match[0],
+  };
+}
+
+function resolveGramsPerUnit(unit, ingredientName) {
+  const u = unit.toLowerCase();
+  if (u.startsWith("cup")) {
+    if (/\bflour\b/i.test(ingredientName)) return 120;
+    if (/\bsugar\b/i.test(ingredientName)) return 200;
+    if (/\boil\b/i.test(ingredientName)) return 216;
+    if (/\bmilk|water|juice|broth|cream\b/i.test(ingredientName)) return 240;
+    return 180;
+  }
+  if (u.startsWith("tbsp")) return 15;
+  if (u.startsWith("tsp")) return 5;
+  if (u === "g" || u === "gram" || u === "grams") return 1;
+  if (u === "kg") return 1000;
+  if (u === "ml") return 1;
+  if (u === "l") return 1000;
+  if (u === "oz") return 28.35;
+  return 50;
+}
+
+function resolveMlPerUnit(unit) {
+  const u = unit.toLowerCase();
+  if (u.startsWith("cup")) return 240;
+  if (u.startsWith("tbsp")) return 15;
+  if (u.startsWith("tsp")) return 5;
+  if (u === "ml") return 1;
+  if (u === "l") return 1000;
+  if (u === "oz") return 29.57;
+  return 0;
+}
+
+function collectSubstitutions(ingredients) {
+  const lines = [];
+  ingredients.forEach((item) => {
+    const key = Object.keys(substitutionMap).find((k) => item.name.toLowerCase().includes(k));
+    if (key) lines.push(`${item.name}: ${substitutionMap[key].join(", ")}`);
+  });
+  return lines;
+}
+
+function looksLikeIngredient(line) {
+  return /^[-*]?\s*(\d|one|two|three|four|five)\b/i.test(line);
+}
+
+function looksLikeStep(line) {
+  return /\b(preheat|mix|whisk|stir|bake|cook|fold|simmer|chop|add|beat|serve|rest)\b/i.test(line);
+}
+
+function cleanBullet(line) {
+  return line.replace(/^[-*]\s+/, "").replace(/^\d+[.)]\s+/, "").trim();
+}
+
+function numberFromText(text) {
+  return text.split(/\s+/).reduce((sum, token) => {
+    if (token.includes("/")) {
+      const [a, b] = token.split("/").map(Number);
+      return sum + a / b;
+    }
+    return sum + Number(token);
+  }, 0);
+}
+
+function htmlToText(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return doc.body?.innerText || "";
+}
+
+function findTitleFromHtml(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return doc.querySelector("title")?.textContent?.trim() || "";
+}
+
+function fileToDataUrl(file) {
+  if (!file) return Promise.resolve("");
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve("");
+    reader.readAsDataURL(file);
+  });
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (char) => {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char];
+  });
+}
+
+function escapeHtmlKeepButtons(raw) {
+  const token = "__BTN__";
+  const pieces = [];
+  const replaced = raw.replace(/<button[^>]*>.*?<\/button>/g, (btn) => {
+    pieces.push(btn);
+    return token;
+  });
+  let escaped = escapeHtml(replaced);
+  pieces.forEach((btn) => {
+    escaped = escaped.replace(token, btn);
+  });
+  return escaped;
+}
+
+function round(value) {
+  return Math.round(value * 10) / 10;
+}
+
+function getSyncConfig() {
+  const raw = window.RECIPE_SYNC || {};
+  return { ...DEFAULT_SYNC_CONFIG, ...raw };
+}
+
+function isSyncEnabled() {
+  const cfg = getSyncConfig();
+  return Boolean(cfg.enabled && cfg.supabaseUrl && cfg.anonKey);
+}
+
+function syncHeaders() {
+  const cfg = getSyncConfig();
+  return {
+    apikey: cfg.anonKey,
+    Authorization: `Bearer ${cfg.anonKey}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function hydrateFromCloud() {
+  if (!isSyncEnabled()) return;
+  const cloudStore = await pullCloudStore();
+  if (cloudStore && Array.isArray(cloudStore.recipes)) {
+    localStorage.setItem(APP_KEY, JSON.stringify(cloudStore));
+  }
+}
+
+function queueCloudSave(store) {
+  if (!isSyncEnabled()) return;
+  pushCloudStore(store).catch(() => {});
+}
+
+async function pullCloudStore() {
+  const cfg = getSyncConfig();
+  const url = `${cfg.supabaseUrl}/rest/v1/${cfg.table}?id=eq.${encodeURIComponent(cfg.rowId)}&select=payload&limit=1`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: syncHeaders(),
+  });
+  if (!response.ok) return null;
+  const data = await response.json();
+  if (!Array.isArray(data) || !data[0] || !data[0].payload) return null;
+  return data[0].payload;
+}
+
+async function pushCloudStore(store) {
+  const cfg = getSyncConfig();
+  const url = `${cfg.supabaseUrl}/rest/v1/${cfg.table}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      ...syncHeaders(),
+      Prefer: "resolution=merge-duplicates",
+    },
+    body: JSON.stringify([
+      {
+        id: cfg.rowId,
+        payload: store,
+        updated_at: new Date().toISOString(),
+      },
+    ]),
+  });
+  return response.ok;
+}
+
+function setupSyncControls() {
+  const statusNode = document.querySelector("#syncStatus");
+  const pullBtn = document.querySelector("#pullCloudBtn");
+  const pushBtn = document.querySelector("#pushCloudBtn");
+  if (!statusNode || !pullBtn || !pushBtn) return;
+
+  const setStatus = (msg) => {
+    statusNode.textContent = msg;
+  };
+
+  if (!isSyncEnabled()) {
+    setStatus("Cloud sync is disabled. Fill sync-config.js to connect Supabase.");
+    pullBtn.disabled = true;
+    pushBtn.disabled = true;
+    return;
+  }
+
+  setStatus("Cloud sync connected. Local changes are auto-pushed.");
+
+  pullBtn.addEventListener("click", async () => {
+    setStatus("Pulling data from cloud...");
+    try {
+      const cloud = await pullCloudStore();
+      if (!cloud) {
+        setStatus("No cloud data found yet.");
+        return;
+      }
+      localStorage.setItem(APP_KEY, JSON.stringify(cloud));
+      setStatus("Cloud data pulled successfully. Reloading...");
+      location.reload();
+    } catch {
+      setStatus("Cloud pull failed.");
+    }
+  });
+
+  pushBtn.addEventListener("click", async () => {
+    setStatus("Pushing local data to cloud...");
+    try {
+      await pushCloudStore(loadStore());
+      setStatus("Cloud push completed.");
+    } catch {
+      setStatus("Cloud push failed.");
+    }
+  });
+}

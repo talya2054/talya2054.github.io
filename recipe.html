@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recipe Atlas - Recipe</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-page="detail">
+    <header class="site-header">
+      <a class="brand" href="index.html">Recipe Atlas</a>
+      <nav class="site-nav">
+        <a href="index.html">Home</a>
+        <a href="recipes.html">All Recipes</a>
+        <a href="add-recipe.html">Add Recipe</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section class="panel">
+        <div class="section-head">
+          <h1 id="recipeName">Recipe</h1>
+          <span id="recipeCategoryTag" class="tag"></span>
+        </div>
+        <div class="toolbar">
+          <label class="inline-label" for="scaleSelect">Scale</label>
+          <select id="scaleSelect">
+            <option value="1">1x</option>
+            <option value="0.5">0.5x</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+            <option value="4">4x</option>
+          </select>
+          <input id="customScale" type="number" min="0.1" step="0.1" placeholder="Custom scale" />
+          <button class="btn btn-secondary" id="applyScale" type="button">Apply</button>
+          <button class="btn btn-secondary" id="cookModeBtn" type="button">Cook Mode</button>
+          <button class="btn btn-secondary" id="printBtn" type="button">Print Card</button>
+          <button class="btn btn-secondary" id="snapshotBtn" type="button">Save Snapshot</button>
+        </div>
+        <p id="scaleHint" class="hint"></p>
+
+        <div class="detail-grid">
+          <article class="subpanel">
+            <h2>Ingredients</h2>
+            <ul id="ingredientList" class="list"></ul>
+          </article>
+          <article class="subpanel">
+            <h2>Method</h2>
+            <ol id="stepList" class="list"></ol>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Substitute Assistant</h2>
+        </div>
+        <div class="toolbar">
+          <select id="subIngredient"></select>
+          <button id="subSuggestBtn" class="btn btn-secondary" type="button">Suggest Swap</button>
+        </div>
+        <div id="subResult" class="review-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Version Snapshots</h2>
+        </div>
+        <div id="snapshotList" class="review-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Comments and Results</h2>
+        </div>
+        <div class="comment-form">
+          <label for="reviewText">Review</label>
+          <textarea id="reviewText" rows="4" placeholder="How did it turn out?"></textarea>
+          <div class="toolbar">
+            <label class="inline-label" for="reviewRating">Rating</label>
+            <select id="reviewRating">
+              <option value="5">5</option>
+              <option value="4">4</option>
+              <option value="3">3</option>
+              <option value="2">2</option>
+              <option value="1">1</option>
+            </select>
+            <input id="reviewImage" type="file" accept="image/*" />
+            <button id="saveReviewBtn" class="btn btn-primary" type="button">Post Review</button>
+          </div>
+        </div>
+        <div id="reviewList" class="review-list"></div>
+      </section>
+    </main>
+
+    <script src="sync-config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
