@@ -104,7 +104,14 @@ function initRecipes() {
     const category = categoryFilter.value;
     const sorted = [...store.recipes].filter((recipe) => {
       const inCategory = category === "all" || recipe.category === category;
-      const haystack = `${recipe.title} ${recipe.ingredients.map((x) => x.name).join(" ")}`.toLowerCase();
+      const haystack = [
+        recipe.title,
+        recipe.category,
+        recipe.ingredients.map((x) => `${x.name} ${x.original || ""}`).join(" "),
+        (recipe.steps || []).join(" "),
+      ]
+        .join(" ")
+        .toLowerCase();
       return inCategory && haystack.includes(query);
     });
 
@@ -119,6 +126,9 @@ function initRecipes() {
 }
 
 function initAddRecipe() {
+  const store = loadStore();
+  const editId = new URLSearchParams(location.search).get("edit");
+  const editingRecipe = editId ? store.recipes.find((r) => r.id === editId) : null;
   const category = document.querySelector("#recipeCategory");
   const urlInput = document.querySelector("#recipeUrl");
   const titleInput = document.querySelector("#recipeTitle");
@@ -132,7 +142,16 @@ function initAddRecipe() {
   const fetchBtn = document.querySelector("#fetchUrlBtn");
 
   category.innerHTML = CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join("");
-  source.value = sampleRecipeText;
+  if (editingRecipe) {
+    titleInput.value = editingRecipe.title;
+    category.value = editingRecipe.category;
+    ingredientsEditor.value = editingRecipe.ingredients.map((x) => x.original || x.name).join("\n");
+    stepsEditor.value = (editingRecipe.steps || []).join("\n");
+    source.value = editingRecipe.sourceText || "";
+    urlInput.value = editingRecipe.sourceUrl || "";
+    previewBox.textContent = "Editing mode: update fields and save.";
+    saveBtn.textContent = "Update in Cloud";
+  }
 
   analyzeBtn.addEventListener("click", async () => {
     const raw = source.value.trim();
@@ -146,7 +165,7 @@ function initAddRecipe() {
       titleInput.value = aiRecipe.title || titleInput.value;
       if (CATEGORIES.includes(aiRecipe.category)) category.value = aiRecipe.category;
       ingredientsEditor.value = (aiRecipe.ingredients || []).join("\n");
-      stepsEditor.value = (aiRecipe.steps || []).join("\n");
+      stepsEditor.value = (aiRecipe.steps || []).map(convertFahrenheitTextToCelsius).join("\n");
       previewBox.textContent = "AI analysis complete. You can edit anything before saving.";
     } catch (error) {
       previewBox.textContent = "AI analysis failed. You can use Fallback Parse and edit manually.";
@@ -157,12 +176,11 @@ function initAddRecipe() {
     const parsed = parseRecipe(source.value, category.value, titleInput.value.trim());
     titleInput.value = parsed.title;
     ingredientsEditor.value = parsed.ingredients.map((x) => x.original).join("\n");
-    stepsEditor.value = parsed.steps.join("\n");
+    stepsEditor.value = parsed.steps.map(convertFahrenheitTextToCelsius).join("\n");
     previewBox.innerHTML = `${renderPreview(parsed)}<p>Fallback parse loaded into editable fields.</p>`;
   });
 
   saveBtn.addEventListener("click", async () => {
-    const store = loadStore();
     const parsed = buildRecipeFromEditors({
       title: titleInput.value.trim(),
       category: category.value,
@@ -171,7 +189,20 @@ function initAddRecipe() {
       sourceText: source.value,
     });
     if (urlInput.value.trim()) parsed.sourceUrl = urlInput.value.trim();
-    store.recipes.push(parsed);
+    if (editingRecipe) {
+      const idx = store.recipes.findIndex((r) => r.id === editingRecipe.id);
+      if (idx >= 0) {
+        parsed.id = editingRecipe.id;
+        parsed.createdAt = editingRecipe.createdAt;
+        parsed.reviews = editingRecipe.reviews || [];
+        parsed.snapshots = editingRecipe.snapshots || [];
+        store.recipes[idx] = parsed;
+      } else {
+        store.recipes.push(parsed);
+      }
+    } else {
+      store.recipes.push(parsed);
+    }
     saveStore(store);
     previewBox.textContent = "Saving to cloud...";
     try {
@@ -220,6 +251,7 @@ function initDetail() {
   const scaleHint = document.querySelector("#scaleHint");
   const cookModeBtn = document.querySelector("#cookModeBtn");
   const printBtn = document.querySelector("#printBtn");
+  const editRecipeBtn = document.querySelector("#editRecipeBtn");
   const reviewText = document.querySelector("#reviewText");
   const reviewRating = document.querySelector("#reviewRating");
   const reviewImage = document.querySelector("#reviewImage");
@@ -239,7 +271,7 @@ function initDetail() {
 
   const render = () => {
     ingredientList.innerHTML = recipe.ingredients.map((item) => renderIngredient(item, currentScale)).join("");
-    stepList.innerHTML = recipe.steps.map((step) => renderStep(step, currentScale)).join("");
+    stepList.innerHTML = recipe.steps.map((step) => renderStep(step, currentScale, recipe.ingredients)).join("");
     renderReviews(recipe.reviews);
     renderSnapshots(recipe.snapshots, snapshotList);
     subIngredient.innerHTML = recipe.ingredients
@@ -300,6 +332,9 @@ function initDetail() {
   });
 
   printBtn.addEventListener("click", () => window.print());
+  editRecipeBtn.addEventListener("click", () => {
+    location.href = `add-recipe.html?edit=${encodeURIComponent(recipe.id)}`;
+  });
 
   snapshotBtn.addEventListener("click", () => {
     recipe.snapshots.unshift({
@@ -391,24 +426,33 @@ function renderIngredient(item, scale) {
     : `<li><strong>${escapeHtml(item.name)}</strong>: ${grams} g</li>`;
 }
 
-function renderStep(step, scale) {
-  const withTimer = step.replace(/(\d+)\s*min/gi, (match, mins) => {
+function renderStep(step, scale, ingredients) {
+  const normalizedStep = convertFahrenheitTextToCelsius(step);
+  const enrichedStep = injectIngredientAmountsIntoStep(normalizedStep, ingredients || [], scale);
+  const withTimer = enrichedStep.replace(/(\d+)\s*min/gi, (match, mins) => {
     const scaled = Math.max(1, round(Number(mins) * scale));
-    return `${scaled} min <button class="timer-chip" type="button" data-minutes="${scaled}">Start ${scaled}m</button>`;
+    return `${scaled} min <button class="timer-chip start" type="button" data-minutes="${scaled}">Start ${scaled}m</button> <button class="timer-chip reset" type="button" data-minutes="${scaled}">Reset</button>`;
   });
   return `<li>${escapeHtmlKeepButtons(withTimer)}</li>`;
 }
 
 function wireStepTimers() {
-  document.querySelectorAll(".timer-chip").forEach((button) => {
+  document.querySelectorAll(".timer-chip.start").forEach((button) => {
     button.addEventListener("click", () => {
       const minutes = Number(button.dataset.minutes);
       startCountdown(button, minutes * 60);
     });
   });
+  document.querySelectorAll(".timer-chip.reset").forEach((button) => {
+    button.addEventListener("click", () => {
+      const minutes = Number(button.dataset.minutes);
+      resetCountdown(button, minutes * 60);
+    });
+  });
 }
 
 function startCountdown(button, secondsLeft) {
+  clearTimerForButton(button);
   button.disabled = true;
   const tick = () => {
     const m = Math.floor(secondsLeft / 60);
@@ -416,6 +460,8 @@ function startCountdown(button, secondsLeft) {
     button.textContent = `${m}:${s}`;
     if (secondsLeft === 0) {
       button.textContent = "Done";
+      button.disabled = false;
+      button.dataset.timerId = "";
       try {
         const audio = new Audio("data:audio/wav;base64,UklGRlQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=");
         audio.play();
@@ -423,9 +469,26 @@ function startCountdown(button, secondsLeft) {
       return;
     }
     secondsLeft -= 1;
-    setTimeout(tick, 1000);
+    const id = setTimeout(tick, 1000);
+    button.dataset.timerId = String(id);
   };
   tick();
+}
+
+function resetCountdown(resetButton, seconds) {
+  const host = resetButton.parentElement;
+  if (!host) return;
+  const startBtn = host.querySelector(".timer-chip.start");
+  if (!startBtn) return;
+  clearTimerForButton(startBtn);
+  startBtn.disabled = false;
+  startBtn.textContent = `Start ${Math.max(1, Math.round(seconds / 60))}m`;
+}
+
+function clearTimerForButton(startButton) {
+  const timerId = Number(startButton.dataset.timerId || "0");
+  if (timerId) clearTimeout(timerId);
+  startButton.dataset.timerId = "";
 }
 
 function renderReviews(reviews) {
@@ -489,7 +552,7 @@ function parseRecipe(text, category, explicitTitle) {
     }
     if (mode === "step" || looksLikeStep(line)) {
       mode = "step";
-      steps.push(cleanBullet(line));
+      steps.push(convertFahrenheitTextToCelsius(cleanBullet(line)));
     }
   });
 
@@ -640,6 +703,39 @@ function round(value) {
   return Math.round(value * 10) / 10;
 }
 
+function ingredientMeasureText(item, scale) {
+  const grams = round(item.grams * scale);
+  if (item.isLiquid) {
+    const ml = round(item.ml * scale);
+    return `${grams} g / ${ml} ml`;
+  }
+  return `${grams} g`;
+}
+
+function injectIngredientAmountsIntoStep(step, ingredients, scale) {
+  let result = step;
+  const sorted = [...ingredients].sort((a, b) => b.name.length - a.name.length);
+  sorted.forEach((item) => {
+    const name = (item.name || "").trim();
+    if (!name || name.length < 2) return;
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, "i");
+    if (pattern.test(result)) {
+      result = result.replace(pattern, `${name} (${ingredientMeasureText(item, scale)})`);
+    }
+  });
+  return result;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function convertFahrenheitTextToCelsius(line) {
+  return line
+    .replace(/(\d+(?:\.\d+)?)\s*°?\s*F\b/gi, (match, f) => `${Math.round(((Number(f) - 32) * 5) / 9)}C`)
+    .replace(/(\d+(?:\.\d+)?)\s*degrees?\s*fahrenheit\b/gi, (match, f) => `${Math.round(((Number(f) - 32) * 5) / 9)}C`);
+}
+
 function buildRecipeFromEditors({ title, category, ingredientsText, stepsText, sourceText }) {
   const ingredientLines = ingredientsText
     .split("\n")
@@ -648,7 +744,8 @@ function buildRecipeFromEditors({ title, category, ingredientsText, stepsText, s
   const stepLines = stepsText
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map(convertFahrenheitTextToCelsius);
   const ingredients = ingredientLines.map(toIngredientData);
   return {
     id: `r_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -680,6 +777,7 @@ async function analyzeRecipeWithGemini(rawText) {
     "Category must be one of: Meal, Dessert, Breakfast, Snack, Soup, Salad, Bread, Drink.",
     "ingredients must be an array of strings.",
     "steps must be an array of strings.",
+    "All temperatures in steps must be in Celsius only (e.g. 180C).",
     "Recipe text:",
     rawText,
   ].join("\n");
@@ -717,7 +815,7 @@ async function saveRecipeToFirestore(recipe) {
   }
   const endpoint =
     `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cfg.firebaseProjectId)}` +
-    `/databases/(default)/documents/recipes?documentId=${encodeURIComponent(recipe.id)}&key=${encodeURIComponent(cfg.firebaseApiKey)}`;
+    `/databases/(default)/documents/recipes/${encodeURIComponent(recipe.id)}?key=${encodeURIComponent(cfg.firebaseApiKey)}`;
 
   const doc = {
     fields: {
@@ -735,7 +833,7 @@ async function saveRecipeToFirestore(recipe) {
   };
 
   const response = await fetch(endpoint, {
-    method: "POST",
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(doc),
   });

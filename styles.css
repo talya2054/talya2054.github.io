@@ -19,6 +19,10 @@ body {
   margin: 0;
   color: var(--text);
   background:
+    radial-gradient(circle at 10% 12%, rgba(255, 65, 104, 0.15) 1.2px, transparent 1.4px),
+    radial-gradient(circle at 20% 24%, rgba(255, 65, 104, 0.12) 1.1px, transparent 1.3px),
+    radial-gradient(circle at 86% 30%, rgba(255, 65, 104, 0.12) 1.1px, transparent 1.3px),
+    radial-gradient(circle at 76% 86%, rgba(255, 65, 104, 0.14) 1.2px, transparent 1.4px),
     radial-gradient(circle at 8% 20%, rgba(227, 63, 118, 0.1), transparent 34%),
     radial-gradient(circle at 88% 80%, rgba(255, 106, 142, 0.14), transparent 32%),
     linear-gradient(145deg, #fff8fb, var(--bg));
@@ -46,6 +50,14 @@ a {
 .brand {
   font-weight: 800;
   color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.brand::before {
+  content: "🍓";
+  font-size: 0.92rem;
 }
 
 .site-nav {
@@ -172,6 +184,22 @@ a {
   border-radius: 12px;
   padding: 12px;
   background: #fff;
+  position: relative;
+}
+
+.recipe-card::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff3f68;
+  box-shadow:
+    -8px 6px 0 #ff3f68,
+    -3px 12px 0 #ff3f68;
+  opacity: 0.75;
 }
 
 .stat-label {
@@ -272,6 +300,10 @@ label {
   border-radius: 999px;
   background: #fff5fa;
   font-size: 0.8rem;
+}
+
+.timer-chip.reset {
+  background: #fff;
 }
 
 .review-list {
