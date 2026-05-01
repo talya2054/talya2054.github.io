@@ -288,12 +288,30 @@ label {
   line-height: 1.5;
 }
 
+.step-item {
+  margin-bottom: 10px;
+}
+
+.timer-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.original-amount {
+  color: var(--muted);
+  opacity: 0.75;
+  font-size: 0.9em;
+}
+
 .inline-label {
   font-weight: 700;
 }
 
 .timer-chip {
-  margin-left: 8px;
+  margin-left: 0;
   min-height: 28px;
   padding: 0 9px;
   border: 1px solid var(--line);

@@ -168,7 +168,7 @@ function initAddRecipe() {
       stepsEditor.value = (aiRecipe.steps || []).map(convertFahrenheitTextToCelsius).join("\n");
       previewBox.textContent = "AI analysis complete. You can edit anything before saving.";
     } catch (error) {
-      previewBox.textContent = "AI analysis failed. You can use Fallback Parse and edit manually.";
+      previewBox.textContent = `AI analysis failed: ${error.message}. You can use Fallback Parse and edit manually.`;
     }
   });
 
@@ -218,16 +218,16 @@ function initAddRecipe() {
   fetchBtn.addEventListener("click", async () => {
     const url = urlInput.value.trim();
     if (!url) return;
+    previewBox.textContent = "Importing from link...";
     try {
-      const response = await fetch(url, { mode: "cors" });
-      const html = await response.text();
-      const text = htmlToText(html);
+      const text = await fetchRecipeTextFromUrl(url);
       source.value = text.slice(0, 18000);
       if (!titleInput.value.trim()) {
-        titleInput.value = findTitleFromHtml(html) || "";
+        titleInput.value = guessTitleFromText(text) || "";
       }
+      previewBox.textContent = "Link import completed. You can run AI analysis now.";
     } catch (err) {
-      previewBox.textContent = "Could not fetch this URL directly here. Paste the recipe text manually below.";
+      previewBox.textContent = `Could not import this link automatically: ${err.message}`;
     }
   });
 }
@@ -419,7 +419,7 @@ function renderIngredient(item, scale) {
     const base = hasLiquid
       ? `${grams} g (${ml} ml)`
       : `${grams} g`;
-    return `<li><strong>${escapeHtml(item.name)}</strong>: ${base} | original: ${escapeHtml(item.original)}</li>`;
+    return `<li><strong>${escapeHtml(item.name)}</strong>: ${base} <span class="original-amount">| original: ${escapeHtml(item.original)}</span></li>`;
   }
   return hasLiquid
     ? `<li><strong>${escapeHtml(item.name)}</strong>: ${grams} g (${ml} ml)</li>`
@@ -431,9 +431,9 @@ function renderStep(step, scale, ingredients) {
   const enrichedStep = injectIngredientAmountsIntoStep(normalizedStep, ingredients || [], scale);
   const withTimer = enrichedStep.replace(/(\d+)\s*min/gi, (match, mins) => {
     const scaled = Math.max(1, round(Number(mins) * scale));
-    return `${scaled} min <button class="timer-chip start" type="button" data-minutes="${scaled}">Start ${scaled}m</button> <button class="timer-chip reset" type="button" data-minutes="${scaled}">Reset</button>`;
+    return `${scaled} min <span class="timer-actions"><button class="timer-chip start" type="button" data-minutes="${scaled}">Start ${scaled}m</button> <button class="timer-chip reset" type="button" data-minutes="${scaled}">Reset</button></span>`;
   });
-  return `<li>${escapeHtmlKeepButtons(withTimer)}</li>`;
+  return `<li class="step-item">${escapeHtmlKeepButtons(withTimer)}</li>`;
 }
 
 function wireStepTimers() {
@@ -767,8 +767,11 @@ async function analyzeRecipeWithGemini(rawText) {
   if (!cfg.geminiApiKey) {
     throw new Error("Missing Gemini API key");
   }
-  const model = cfg.geminiModel || "gemini-1.5-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.geminiApiKey)}`;
+  const candidateModels = [
+    cfg.geminiModel || "gemini-2.0-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+  ].filter((v, i, arr) => arr.indexOf(v) === i);
 
   const prompt = [
     "You are a recipe parser.",
@@ -782,30 +785,41 @@ async function analyzeRecipeWithGemini(rawText) {
     rawText,
   ].join("\n");
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json",
-      },
-    }),
-  });
-  if (!response.ok) {
-    throw new Error("Gemini request failed");
+  let lastError = "Unknown Gemini error";
+  for (const model of candidateModels) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.geminiApiKey)}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2 },
+      }),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      lastError = `${response.status} ${errText.slice(0, 180)}`;
+      continue;
+    }
+    const payload = await response.json();
+    const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      lastError = "Gemini returned empty content";
+      continue;
+    }
+    const parsed = safeParseJson(text);
+    if (!parsed) {
+      lastError = "Gemini returned invalid JSON";
+      continue;
+    }
+    return {
+      title: String(parsed.title || "").trim(),
+      category: String(parsed.category || "Meal").trim(),
+      ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
+      steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
+    };
   }
-  const payload = await response.json();
-  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("No Gemini output");
-  const parsed = JSON.parse(text);
-  return {
-    title: String(parsed.title || "").trim(),
-    category: String(parsed.category || "Meal").trim(),
-    ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
-    steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
-  };
+  throw new Error(lastError);
 }
 
 async function saveRecipeToFirestore(recipe) {
@@ -841,6 +855,56 @@ async function saveRecipeToFirestore(recipe) {
     throw new Error("Firestore save failed");
   }
   return response.json();
+}
+
+function safeParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const block = text.match(/\{[\s\S]*\}/);
+    if (!block) return null;
+    try {
+      return JSON.parse(block[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function fetchRecipeTextFromUrl(url) {
+  const attempts = [
+    async () => {
+      const res = await fetch(url, { mode: "cors" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      return htmlToText(html);
+    },
+    async () => {
+      const proxyUrl = `https://r.jina.ai/http://${url.replace(/^https?:\/\//i, "")}`;
+      const res = await fetch(proxyUrl);
+      if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
+      return await res.text();
+    },
+  ];
+
+  let lastError = "Unknown import error";
+  for (const attempt of attempts) {
+    try {
+      const text = await attempt();
+      if (text && text.trim().length > 20) return text;
+      lastError = "Imported content was empty";
+    } catch (err) {
+      lastError = err.message || String(err);
+    }
+  }
+  throw new Error(lastError);
+}
+
+function guessTitleFromText(text) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 4 && line.length < 80);
 }
 
 function getSyncConfig() {
