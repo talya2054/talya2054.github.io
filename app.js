@@ -800,14 +800,14 @@ async function analyzeRecipeWithGemini(rawText) {
     rawText,
   ].join("\n");
 
-  const GEMINI_API_KEY = encodeURIComponent(cfg.geminiApiKey);
+  const GEMINI_API_KEY = cfg.geminiApiKey;
   const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_API_KEY;
   console.log("Full URL:", url.replace(GEMINI_API_KEY, "SECRET"));
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 },
     }),
   });
