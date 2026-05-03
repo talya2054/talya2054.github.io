@@ -786,7 +786,6 @@ async function analyzeRecipeWithGemini(rawText) {
   if (!cfg.geminiApiKey) {
     throw new Error("Missing Gemini API key");
   }
-  const model = "gemini-1.5-flash";
 
   const prompt = [
     "You are a recipe parser.",
@@ -801,7 +800,9 @@ async function analyzeRecipeWithGemini(rawText) {
   ].join("\n");
 
   const GEMINI_API_KEY = cfg.geminiApiKey;
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_API_KEY;
+  const apiBase = "https://generativelanguage.googleapis.com";
+  const selectedModel = await resolveAvailableGeminiModel(apiBase, GEMINI_API_KEY);
+  const url = `${apiBase}/v1beta/models/${selectedModel}:generateContent?key=${GEMINI_API_KEY}`;
   console.log("Full URL:", url.replace(GEMINI_API_KEY, "SECRET"));
   const response = await fetch(url, {
     method: "POST",
@@ -830,6 +831,28 @@ async function analyzeRecipeWithGemini(rawText) {
     ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
     steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
   };
+}
+
+async function resolveAvailableGeminiModel(apiBase, apiKey) {
+  const preferred = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"];
+  const listUrl = `${apiBase}/v1beta/models?key=${apiKey}`;
+  const listResponse = await fetch(listUrl, { method: "GET" });
+  if (!listResponse.ok) {
+    const errText = await listResponse.text();
+    throw new Error(`ListModels failed: ${listResponse.status} ${errText}`);
+  }
+  const payload = await listResponse.json();
+  const models = Array.isArray(payload.models) ? payload.models : [];
+  const supported = models
+    .filter((m) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+    .map((m) => String(m.name || "").replace(/^models\//, ""))
+    .filter(Boolean);
+
+  for (const wanted of preferred) {
+    if (supported.includes(wanted)) return wanted;
+  }
+  if (supported.length) return supported[0];
+  throw new Error("No generateContent model is available for this API key/project.");
 }
 
 async function saveRecipeToFirestore(recipe) {
