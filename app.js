@@ -39,6 +39,8 @@ const substitutionMap = {
   flour: ["cake flour", "1:1 gluten-free blend"],
 };
 
+let analyzeInFlight = false;
+
 init();
 
 async function init() {
@@ -154,6 +156,10 @@ function initAddRecipe() {
   }
 
   analyzeBtn.addEventListener("click", async () => {
+    if (analyzeInFlight) {
+      previewBox.textContent = "AI request already in progress. Please wait.";
+      return;
+    }
     const raw = source.value.trim();
     if (!raw) {
       previewBox.textContent = "Please paste a recipe first.";
@@ -165,6 +171,8 @@ function initAddRecipe() {
       return;
     }
     previewBox.textContent = "Analyzing with AI...";
+    analyzeInFlight = true;
+    analyzeBtn.disabled = true;
     try {
       const aiRecipe = await analyzeRecipeWithGemini(raw);
       titleInput.value = aiRecipe.title || titleInput.value;
@@ -174,6 +182,9 @@ function initAddRecipe() {
       previewBox.textContent = "AI analysis complete. You can edit anything before saving.";
     } catch (error) {
       previewBox.textContent = `AI analysis failed: ${error.message}. You can use Fallback Parse and edit manually.`;
+    } finally {
+      analyzeInFlight = false;
+      analyzeBtn.disabled = false;
     }
   });
 
@@ -775,11 +786,7 @@ async function analyzeRecipeWithGemini(rawText) {
   if (!cfg.geminiApiKey) {
     throw new Error("Missing Gemini API key");
   }
-  const candidateModels = [
-    cfg.geminiModel || "gemini-2.0-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-  ].filter((v, i, arr) => arr.indexOf(v) === i);
+  const model = "gemini-1.5-flash";
 
   const prompt = [
     "You are a recipe parser.",
@@ -793,41 +800,34 @@ async function analyzeRecipeWithGemini(rawText) {
     rawText,
   ].join("\n");
 
-  let lastError = "Unknown Gemini error";
-  for (const model of candidateModels) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.geminiApiKey)}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2 },
-      }),
-    });
-    if (!response.ok) {
-      const errText = await response.text();
-      lastError = `${response.status} ${errText.slice(0, 180)}`;
-      continue;
-    }
-    const payload = await response.json();
-    const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      lastError = "Gemini returned empty content";
-      continue;
-    }
-    const parsed = safeParseJson(text);
-    if (!parsed) {
-      lastError = "Gemini returned invalid JSON";
-      continue;
-    }
-    return {
-      title: String(parsed.title || "").trim(),
-      category: String(parsed.category || "Meal").trim(),
-      ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
-      steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
-    };
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.geminiApiKey)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2 },
+    }),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`${response.status} ${errText}`);
   }
-  throw new Error(lastError);
+  const payload = await response.json();
+  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error("Gemini returned empty content");
+  }
+  const parsed = safeParseJson(text);
+  if (!parsed) {
+    throw new Error("Gemini returned invalid JSON");
+  }
+  return {
+    title: String(parsed.title || "").trim(),
+    category: String(parsed.category || "Meal").trim(),
+    ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
+    steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
+  };
 }
 
 async function saveRecipeToFirestore(recipe) {
