@@ -786,7 +786,7 @@ async function analyzeRecipeWithGemini(rawText) {
   if (!cfg.geminiApiKey) {
     throw new Error("Missing Gemini API key");
   }
-  const model = "gemini-1.5-flash";
+  const model = "gemini-1.5-flash-latest";
 
   const prompt = [
     "You are a recipe parser.",
@@ -800,7 +800,9 @@ async function analyzeRecipeWithGemini(rawText) {
     rawText,
   ].join("\n");
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.geminiApiKey)}`;
+  const apiKey = encodeURIComponent(cfg.geminiApiKey);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${apiKey}`;
+  console.log("Full URL:", url.replace(apiKey, "SECRET"));
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
