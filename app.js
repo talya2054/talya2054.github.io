@@ -801,45 +801,58 @@ async function analyzeRecipeWithGemini(rawText) {
 
   const GEMINI_API_KEY = cfg.geminiApiKey;
   const apiBase = "https://generativelanguage.googleapis.com";
-  const selectedModel = await resolveAvailableGeminiModel(apiBase, GEMINI_API_KEY);
-  const url = `${apiBase}/v1beta/models/${selectedModel}:generateContent?key=${GEMINI_API_KEY}`;
-  console.log("Full URL:", url.replace(GEMINI_API_KEY, "SECRET"));
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 },
-    }),
-  });
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`${response.status} ${errText}`);
+  const versions = ["v1", "v1beta"];
+  let lastError = "Unknown Gemini error";
+
+  for (const version of versions) {
+    try {
+      const selectedModel = await resolveAvailableGeminiModel(apiBase, GEMINI_API_KEY, version);
+      const url = `${apiBase}/${version}/models/${selectedModel}:generateContent?key=${GEMINI_API_KEY}`;
+      console.log("Full URL:", url.replace(GEMINI_API_KEY, "SECRET"));
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2 },
+        }),
+      });
+      if (!response.ok) {
+        const errText = await response.text();
+        lastError = `${version} ${response.status} ${errText}`;
+        continue;
+      }
+      const payload = await response.json();
+      const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) {
+        lastError = `${version} returned empty content`;
+        continue;
+      }
+      const parsed = safeParseJson(text);
+      if (!parsed) {
+        lastError = `${version} returned invalid JSON`;
+        continue;
+      }
+      return {
+        title: String(parsed.title || "").trim(),
+        category: String(parsed.category || "Meal").trim(),
+        ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
+        steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
+      };
+    } catch (err) {
+      lastError = err.message || String(err);
+    }
   }
-  const payload = await response.json();
-  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error("Gemini returned empty content");
-  }
-  const parsed = safeParseJson(text);
-  if (!parsed) {
-    throw new Error("Gemini returned invalid JSON");
-  }
-  return {
-    title: String(parsed.title || "").trim(),
-    category: String(parsed.category || "Meal").trim(),
-    ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients.map((x) => String(x).trim()).filter(Boolean) : [],
-    steps: Array.isArray(parsed.steps) ? parsed.steps.map((x) => String(x).trim()).filter(Boolean) : [],
-  };
+  throw new Error(lastError);
 }
 
-async function resolveAvailableGeminiModel(apiBase, apiKey) {
+async function resolveAvailableGeminiModel(apiBase, apiKey, version) {
   const preferred = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"];
-  const listUrl = `${apiBase}/v1beta/models?key=${apiKey}`;
+  const listUrl = `${apiBase}/${version}/models?key=${apiKey}`;
   const listResponse = await fetch(listUrl, { method: "GET" });
   if (!listResponse.ok) {
     const errText = await listResponse.text();
-    throw new Error(`ListModels failed: ${listResponse.status} ${errText}`);
+    throw new Error(`ListModels ${version} failed: ${listResponse.status} ${errText}`);
   }
   const payload = await listResponse.json();
   const models = Array.isArray(payload.models) ? payload.models : [];
