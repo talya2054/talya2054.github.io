@@ -6,6 +6,6 @@ window.RECIPE_SYNC = {
   rowId: "main",
   firebaseProjectId: "myrecipes-14261",
   firebaseApiKey: "AIzaSyBNS4nItItZ_ix5IaffLfsVNgys1fizfRI",
-  geminiApiKey: "AIzaSyAchXLEw-V6_CJC6Z8HYI2FbkdSCb-l0Js",
+  geminiApiKey: "AIzaSyDhtrDEdy6N3QZ2XA-BKTiaMIKJWTdN1MI",
   geminiModel: "gemini-1.5-flash",
 };
