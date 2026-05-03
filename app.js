@@ -159,6 +159,11 @@ function initAddRecipe() {
       previewBox.textContent = "Please paste a recipe first.";
       return;
     }
+    if (location.protocol === "file:") {
+      previewBox.textContent =
+        "AI analysis is blocked in file:// mode. Open the deployed HTTPS site (GitHub Pages/Firebase Hosting) and try again.";
+      return;
+    }
     previewBox.textContent = "Analyzing with AI...";
     try {
       const aiRecipe = await analyzeRecipeWithGemini(raw);
@@ -763,6 +768,9 @@ function buildRecipeFromEditors({ title, category, ingredientsText, stepsText, s
 }
 
 async function analyzeRecipeWithGemini(rawText) {
+  if (location.protocol === "file:") {
+    throw new Error("Gemini calls are blocked from file:// origin");
+  }
   const cfg = getSyncConfig();
   if (!cfg.geminiApiKey) {
     throw new Error("Missing Gemini API key");
